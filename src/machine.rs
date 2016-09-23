@@ -1,63 +1,17 @@
-/**
- * Z80 emulator + machine model for a simplistic disk operating system.
- *
- * How it works:
- *
- * - We load a fixed bootstrap ("rom") into location 0 and reset the CPU
- * - The bootstrap loads a boot loader from sector 0
- * - The boot loader loads the OS from subsequent sectors and installs it,
- *   and then calls the warmboot OS routine
- * - The OS warmboot loads the program 'C' and invokes it (the command processor)
- * - The command processor is interactive; naming a file loads that file
- *   as a program and runs it.
- *
- * There is a console:
- *
- * - OUT (0), r to write a character to the console
- * - IN  r, (1) to poll whether the character has been sent (0=ready, 0ffh=busy)
- * - IN  r, (2) to poll whether a character is available (0ffh=available, 0=not)
- * - IN  r, (3) to read a character (ready or not), clears the available flag
- *
- * There is a single disk-like (but linear) storage unit:
- *
- * - OUT (4), r to set low byte of disk block address
- * - OUT (5), r to set high byte of disk block address
- * - OUT (6), r to set low byte of memory block address
- * - OUT (7), r to set high byte of memory block address
- * - OUT (8), r to set and perform operation: 0=read, 1=write
- * - IN  r, (9) to poll for operation completeness; the
- *   data are transfered by DMA without involving the CPU.
- *   Value reads as 0 if ready, FFh if not ready
- * - IN  r, (10) to get completion code.  Zero if OK, otherwise
- *   something else.
- *
- * Polling / busy-wait is bogus but closer to reality than nothing.
- *
- * Soon, we want disk/io and console i/o to run on separate threads, and to support
- * interrupts when disk requests are done, when chars have become available, and
- * perhaps even when chars have been written.  BIOS code would then halt to wait for
- * interrupts.  (Let's hope the halt instruction re-enables interrupts or there
- * could be a race if the device is fast relative to the cpu.)  There would even be
- * separate seek (set disk, set head, set track) and read/write ops.
- */
-
-use z80::Z80;
+use Z80Emu;
 
 use std::fs::File;
+use std::io::{stdin, stdout};
+use std::io::{Read, Write};
 
-pub struct Machine<'a>
+pub struct Machine
 {
-    // CPU, we'll need this to access memory for DMA
-    z80: Option<&'a mut Z80>,
-
     // Console
     char_available: u8,        // set to 0ffh when char available, cleared when char read
     the_char: u8,              // the available char, until the next one arrives
     char_written: u8,          // set to 0 when char has been successfully written, 0ffh while busy
 
     // Simplistic block device (array of blocks)
-    nblocks: u32,              // number of blocks on block device
-    //block_device: &'a mut File,    // backing store for block device
     disk_ready: u8,            // set to 0 when disk is idle / io is complete, 0ffh while busy
     disk_result: u8,           // result of last io operation, 0=ok otherwise some error
     disk_blockaddress_lo: u8,  // set by out()
@@ -66,17 +20,49 @@ pub struct Machine<'a>
     disk_memoryaddress_hi: u8  // set by out()
 }
 
-impl<'a> Machine<'a>
+impl Machine
 {
-    pub fn new(/*device_: &'a mut File,*/ nblocks_: u32) -> Machine<'a> {
-        Machine { z80: None,
+    /*
+    struct stat info;
 
-                  char_available: 0,
+    if (stat(diskfile, &info) != 0) {
+        fprintf(stderr, "Could not open disk image file %s\n", diskfile);
+        exit(1);
+    }
+    if (info.st_size % 256 != 0) {
+        fprintf(stderr, "Disk image file size is not divisible by block size\n");
+        exit(1);
+    }
+    unsigned nblocks = info.st_size / 256;
+    FILE* block_device = fopen(diskfile, "rb+");
+    if (block_device == NULL) {
+        fprintf(stderr, "Could not open block device file\n");
+        exit(1);
+    }
+    */
+
+    pub fn new(diskfile: &str) -> Machine {
+        // TODO:
+        // - spin up a thread to handle the "disk"
+        // - for now, let the number of blocks be a constant known by that thread
+        // - on startup the thread needs to load the data
+        // - a disk operation is then:
+        //   - a command to spin up the disk
+        //   - an interrupt when the disk is spun up
+        //   - commands to set parameters
+        //   - a command to perform the operation
+        //   - an interrupt when the operation is done, or busy-wait (depending on parameters)
+        // - when data are written the thread needs to write them, probably
+        //   asynchronously, with interrupt on done
+        // - Presumably a lot of these disk data are in a monitor somehow
+        //
+        // TODO:
+        // - Console should be a thread too.
+
+        Machine { char_available: 0,
 	          the_char: 0,
 		  char_written: 0,
 
-                  nblocks: nblocks_,
-	          //block_device: device_,
                   disk_ready: 0,
                   disk_result: 0,
                   disk_blockaddress_lo: 0,
@@ -84,10 +70,24 @@ impl<'a> Machine<'a>
                   disk_memoryaddress_lo: 0,
                   disk_memoryaddress_hi: 0 }
     }
+}
 
-    pub fn set_cpu(&mut self, z80:&'a mut Z80) {
-       self.z80 = Some(z80);
+impl Z80Emu
+{
+    pub fn out(&mut self, port: u8, value: u8) {
+        match port {
+	    0 => {
+                let buf = [value];
+                stdout().write(&buf).expect("console out");
+                stdout().flush().expect("console flush");
+                self.machine.char_written = 0;   // ready
+            }
+	    _ => {
+	        panic!("Unmapped output port {}", port);
+            }
+        }
     }
+}
 
 /*
     pub fn out(&self, port: u8, value: u8) {
@@ -203,4 +203,4 @@ impl<'a> Machine<'a>
         return (in(port),(-1,-1));
     }
 */
-}
+//}

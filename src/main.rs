@@ -1,3 +1,46 @@
+/**
+ * Z80 emulator + machine model for a simplistic disk operating system.
+ *
+ * How it works (will eventually work):
+ *
+ * - We load a fixed bootstrap ("rom") into location 0 and reset the CPU
+ * - The bootstrap loads a boot loader from sector 0
+ * - The boot loader loads the OS from subsequent sectors and installs it,
+ *   and then calls the warmboot OS routine
+ * - The OS warmboot loads the program 'C' and invokes it (the command processor)
+ * - The command processor is interactive; naming a file loads that file
+ *   as a program and runs it.
+ *
+ * There is a console:
+ *
+ * - OUT (0), r to write a character to the console
+ * - IN  r, (1) to poll whether the character has been sent (0=ready, 0ffh=busy)
+ * - IN  r, (2) to poll whether a character is available (0ffh=available, 0=not)
+ * - IN  r, (3) to read a character (ready or not), clears the available flag
+ *
+ * There is a single disk-like (but linear) storage unit:
+ *
+ * - OUT (4), r to set low byte of disk block address
+ * - OUT (5), r to set high byte of disk block address
+ * - OUT (6), r to set low byte of memory block address
+ * - OUT (7), r to set high byte of memory block address
+ * - OUT (8), r to set and perform operation: 0=read, 1=write
+ * - IN  r, (9) to poll for operation completeness; the
+ *   data are transfered by DMA without involving the CPU.
+ *   Value reads as 0 if ready, FFh if not ready
+ * - IN  r, (10) to get completion code.  Zero if OK, otherwise
+ *   something else.
+ *
+ * Polling / busy-wait is bogus but closer to reality than nothing.
+ *
+ * We want disk/io and console i/o to run on separate threads, and to
+ * support interrupts when disk requests are done, when chars have
+ * become available, and perhaps even when chars have been written.
+ * BIOS code would then halt to wait for interrupts.  There would even
+ * be separate seek (set disk, set head, set track) and read/write
+ * ops.
+ */
+
 mod machine;
 mod z80;
 
@@ -6,22 +49,33 @@ use z80::Z80;
 
 use std::fs::File;
 use std::io::Read;
-use std::sync::Arc;
 
-const ROMFILE : &'static str = "rom.bin";
+// Arguably the wrong pattern: The "machine" and the "cpu" are
+// separate ideas and there's no reason they should be in the same
+// structure, but they need to reference each other and Rust prevents
+// them from being separate structures that link to each other.
+
+struct Z80Emu {
+    z80: Z80,
+    machine: Machine
+}
 
 fn main() {
-    // TODO: allow romfile and diskfile to be overridden.
+    // TODO: allow romfile and diskfile to be overridden by command
+    // line parameters or environment variables.
 
-    let z80 = Z80::new();
-    let machine = Machine::new(0);
-    let rom = load_rom(ROMFILE);
-    z80.install_rom(&rom, 0, rom.len());
+    let romfile = "rom.bin";
+    let diskfile = "disk.bin";
 
-    //machine.set_cpu(z80);
+    let mut emu = Z80Emu {
+        z80: Z80::new(),
+        machine: Machine::new(diskfile) };
 
-    z80.reset();
-    z80.execute();
+    let rom = load_rom(romfile);
+    emu.install_rom(&rom, 0, rom.len());
+
+    emu.reset();
+    emu.execute();
 
     /*
     struct stat info;
