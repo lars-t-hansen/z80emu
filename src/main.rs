@@ -4,7 +4,7 @@
  * How it works (will eventually work):
  *
  * - We load a fixed bootstrap ("rom") into location 0 and reset the CPU
- * - The bootstrap loads a boot loader from sector 0
+ * - The bootstrap loads a boot loader from head 0, track 0, sectors 0 and 1
  * - The boot loader loads the OS from subsequent sectors and installs it,
  *   and then calls the warmboot OS routine
  * - The OS warmboot loads the program 'C' and invokes it (the command processor)
@@ -13,23 +13,23 @@
  *
  * There is a console:
  *
- * - OUT (0), r to write a character to the console
- * - IN  r, (1) to poll whether the character has been sent (0=ready, 0ffh=busy)
- * - IN  r, (2) to poll whether a character is available (0ffh=available, 0=not)
+ * - OUT (0), r to write a character to the console if the console is ready
+ * - IN  r, (1) to poll whether a character can be sent (0=ready, 0ffh=busy)
+ * - IN  r, (2) to poll whether a character can be read (0ffh=available, 0=not)
  * - IN  r, (3) to read a character (ready or not), clears the available flag
  *
- * There is a single disk-like (but linear) storage unit:
+ * There is a disk storage unit:
  *
- * - OUT (4), r to set low byte of disk block address
- * - OUT (5), r to set high byte of disk block address
+ * - OUT (4), r to select the disk head
+ * - OUT (5), r to select the disk track
  * - OUT (6), r to set low byte of memory block address
  * - OUT (7), r to set high byte of memory block address
- * - OUT (8), r to set and perform operation: 0=read, 1=write
- * - IN  r, (9) to poll for operation completeness; the
- *   data are transfered by DMA without involving the CPU.
- *   Value reads as 0 if ready, FFh if not ready
- * - IN  r, (10) to get completion code.  Zero if OK, otherwise
- *   something else.
+ * - OUT (8), r to set and perform operation: 0=read, 1=write, 2=move head, 3=read params
+ * - OUT (9), r to select the disk sector (for read or write)
+ * - IN  r, (10) to get status: 00 = idle/ready, FF = busy, nn = status code TBD
+ *
+ * Disk parameters TBD but it will be a 128-byte unit describing number of heads,
+ * tracks per head, sectors per track.
  *
  * Polling / busy-wait is bogus but closer to reality than nothing.
  *
@@ -41,6 +41,8 @@
  * ops.
  */
 
+mod console;
+mod disk;
 mod machine;
 mod z80;
 
@@ -69,7 +71,8 @@ fn main() {
 
     let mut emu = Z80Emu {
         z80: Z80::new(),
-        machine: Machine::new(diskfile) };
+        machine: Machine::new(diskfile)
+    };
 
     let rom = load_rom(romfile);
     emu.install_rom(&rom, 0, rom.len());
@@ -77,47 +80,7 @@ fn main() {
     emu.reset();
     emu.execute();
 
-    /*
-    struct stat info;
-
-    if (stat(diskfile, &info) != 0) {
-        fprintf(stderr, "Could not open disk image file %s\n", diskfile);
-        exit(1);
-    }
-    if (info.st_size % 256 != 0) {
-        fprintf(stderr, "Disk image file size is not divisible by block size\n");
-        exit(1);
-    }
-    unsigned nblocks = info.st_size / 256;
-    FILE* block_device = fopen(diskfile, "rb+");
-    if (block_device == NULL) {
-        fprintf(stderr, "Could not open block device file\n");
-        exit(1);
-    }
-    */
-
-    /*
-    File disk = ...;
-    u32 nblocks = ...;
-
-    Machine m = Machine::new(disk, nblocks);
-
-    m.loadROM(romfile);
-
-    Machine m(block_device, nblocks);
-    rom_t roms[1];
-    roms[0].address = 0;
-    roms[0].size = sizeof(romImage);
-    roms[0].image = romImage;
-    Z80 z80(m, 1, roms);
-    m.setCPU(&z80);
-
-    z80.reset();
-    z80.execute();
-
-    // Not so good, want to ensure this is done.
-    fclose(block_device);
-    */
+    emu.halt();
 }
 
 fn load_rom(filename: &str) -> Vec<u8>

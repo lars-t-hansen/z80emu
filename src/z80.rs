@@ -58,7 +58,12 @@ impl Z80Emu {
                 0xD3 => /* OUT (n), A */ {
                     let n = self.z80.mem[pc as usize];
                     pc = ((pc as usize) + 1) as u16;
-                    self.out(n, a);
+                    self.port_out(n, a);
+                }
+                0xDB => /* IN A, (n) */ {
+                    let n = self.z80.mem[pc as usize];
+                    pc = ((pc as usize) + 1) as u16;
+                    a = self.port_in(n);
                 }
                 _ => /* Unknown */ {
                     panic!("Unknown opcode {}", op);
