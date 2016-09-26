@@ -65,6 +65,12 @@ impl Z80Emu {
 		    println!("Halted");
                     return;
                 }
+                0xC3 => /* JP pq */ {
+                    let lo = self.mem[pc as usize];
+                    pc = pc.wrapping_add(1);
+                    let hi = self.mem[pc as usize];
+                    pc = ((hi as u16) << 8) | (lo as u16);
+                }
                 0xD3 => /* OUT (n), A */ {
                     let n = self.mem[pc as usize];
                     pc = pc.wrapping_add(1);

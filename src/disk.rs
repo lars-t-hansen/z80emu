@@ -238,18 +238,16 @@ impl Disk {
 
 fn start_disk_thread(mut dd: DiskThreadData) -> JoinHandle<()> {
     thread::spawn(move || {
-        // file gets moved here
         let mut head_latched = 0;
         let mut track_latched = 0;
-
         loop {
             match dd.cmd_recv.recv().unwrap() {
                 Command::Seek{head, track} => {
+                    // Can't seek here because read/write advance the file pointer; we
+                    // want consecutive reads/writes without intervening seek to
+                    // access the same sector.  Thus seeking is done by read/write.
                     head_latched = head as usize;
                     track_latched = track as usize;
-                    // Can't seek here because read/write advance the file pointer; we
-                    // want two consecutive reads/writes without an intervening seek
-                    // to access the same sector.  So seeking is done by read/write.
                     dd.result.store(CMD_OK, Ordering::SeqCst);
                 }
                 Command::Read{sector} => {
