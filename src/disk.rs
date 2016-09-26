@@ -22,6 +22,29 @@ const CMD_IDLE : usize = 0;
 const CMD_BUSY : usize = 1;
 const CMD_OK : usize = 2;
 
+// Disk sector size is common knowledge, really
+
+const SEC_SIZE : usize = 128;
+
+// The backing file for a disk comprises a number of SEC_SIZE-byte sectors followed
+// by some bytes that describe the disk geometry, currently the geo info is this:
+//
+//   heads: u8,
+//   tracks: u8,
+//   sectors: u8
+//
+// The number of sectors in the file must equal the product of the three values.
+//
+// The disk is laid out as a 3-dimensional row-major order array indexed by
+// [head,track,sector].
+    
+// Disk parameter block constants
+
+const DP_SIZE : usize = 3;        // Size of block in bytes
+const DP_HEADS : usize = 0;       // Offset of number of heads
+const DP_TRACKS : usize = 1;      // Offset of number of tracks
+const DP_SECS : usize = 2;        // Offset of number of sectors
+
 pub struct Disk {
     pub heads: usize,             // Constant: # of heads
     pub tracks_per_head: usize,   // Constant: # of tracks per head
@@ -40,15 +63,13 @@ pub struct Disk {
     disk_thread: JoinHandle<()>
 }
 
-// Sector size is common knowledge, really
-
-const SEC_SIZE : usize = 128;
-
 // Status values of disk
 
 const STAT_IDLE : u8 = 0x00;
 const STAT_BADPARM : u8 = 0x01;
 const STAT_BUSY : u8 = 0xFF;
+
+// Data required by the worker thread
 
 struct DiskThreadData {
     tracks_per_head: usize,
@@ -59,30 +80,18 @@ struct DiskThreadData {
     result: Arc<AtomicUsize>
 }
 
-impl Disk {
-
-    // The backing file for a disk comprises a number of SEC_SIZE-byte sectors followed
-    // by some bytes that describe the disk geometry, currently the geo info is this:
-    //
-    //   heads: u8,
-    //   tracks: u8,
-    //   sectors: u8
-    //
-    // The number of sectors in the file must equal the product of the three values.
-    //
-    // The disk is laid out as a 3-dimensional row-major order array indexed by
-    // [head,track,sector].
-    
+impl Disk
+{
     pub fn start(diskfile:&str) -> io::Result<Disk> {
         let mut file = try!(OpenOptions::new().read(true).write(true).open(diskfile));
 
-        let mut tmp = [0; 3];
-        let fsize = try!(file.seek(SeekFrom::End(-3)));
+        let mut tmp = [0; DP_SIZE];
+        let fsize = try!(file.seek(SeekFrom::End(-(DP_SIZE as i64))));
         try!(file.read(&mut tmp));
 
-        let heads = tmp[0] as usize;
-        let tracks_per_head = tmp[1] as usize;
-        let sectors_per_track = tmp[2] as usize;
+        let heads = tmp[DP_HEADS] as usize;
+        let tracks_per_head = tmp[DP_TRACKS] as usize;
+        let sectors_per_track = tmp[DP_SECS] as usize;
 
         assert!(fsize % (SEC_SIZE as u64) == 0);
         assert!((heads * tracks_per_head * sectors_per_track * SEC_SIZE) as u64 == fsize);
@@ -194,12 +203,10 @@ impl Disk {
 
     pub fn copy_from_addr(&self, mem: &mut [u8; 65536]) {
         if self.state != STAT_BUSY {
-            let mut i = 0;
             let mut k = self.addr;
             let buf = &mut self.buffer.lock().unwrap();
-            while i < 128 {
+            for i in 0..SEC_SIZE-1 {
                 buf[i] = mem[k as usize];
-                i += 1;
                 k = k.wrapping_add(1);
             }
         }
@@ -207,12 +214,10 @@ impl Disk {
 
     pub fn copy_to_addr(&mut self, mem: &mut [u8; 65536]) {
         if self.state != STAT_BUSY {
-            let mut i = 0;
             let mut k = self.addr;
             let buf = &mut self.buffer.lock().unwrap();
-            while i < 128 {
+            for i in 0..SEC_SIZE-1 {
                 mem[k as usize] = buf[i];
-                i += 1;
                 k = k.wrapping_add(1);
             }
         }

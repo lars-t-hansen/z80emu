@@ -17,12 +17,10 @@ impl Z80 {
 
 impl Z80Emu {
     pub fn install_rom(&mut self, rom: &[u8], addr: usize, romsiz: usize) {
-        let mut i = 0;
         let mut k = addr & 65535;
-        while i < romsiz {
+        for i in 0..romsiz-1 {
             self.mem[k] = rom[i];
             k = (k + 1) & 65535;
-            i = i + 1;
         }
     }
 
