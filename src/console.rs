@@ -1,4 +1,5 @@
 // TODO: Need some kind of support for interrupts.
+// TODO: Need proper shutdown support.
 
 use std::io::{Read, stdin, stdout, Write};
 use std::sync::Arc;
@@ -19,7 +20,7 @@ impl Console
 {
     pub fn start() -> Console {
         let in_data = Arc::new(AtomicUsize::new(0));
-        let out_rdy = Arc::new(AtomicBool::new(false));
+        let out_rdy = Arc::new(AtomicBool::new(true));
         let (send_outchar, recv_outchar) = channel();
 
         // Output thread
@@ -27,6 +28,8 @@ impl Console
             let out_rdy = out_rdy.clone();
             thread::spawn(move || {
                 loop {
+                    // TODO: should handle error here, which we'll receive if the
+                    // channel is closed on the parent side.
                     let c = recv_outchar.recv().unwrap();
                     let buf = [c];
                     stdout().write(&buf).expect("console out");
@@ -42,6 +45,8 @@ impl Console
             thread::spawn(move || {
                 loop {
                     let mut buf = [0; 1];
+                    // TODO: interrupt the blocking read if we want to halt.  Not
+                    // completely clear if this is properly supported, and if so how.
                     stdin().read(&mut buf).expect("console in");
                     in_data.store(DATA_AVAIL | (buf[0] as usize), Ordering::SeqCst);
                 }
@@ -54,7 +59,7 @@ impl Console
     }
 
     pub fn halt(&self) {
-        // TODO: Should stop the threads
+        // TODO: Should stop the threads, see comments above.
     }
 
     pub fn in_ready(&self) -> bool {

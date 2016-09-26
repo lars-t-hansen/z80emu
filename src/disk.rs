@@ -1,180 +1,290 @@
+use std::fs::{File, OpenOptions};
+use std::io;
+use std::io::{Read, Write, Seek, SeekFrom};
+use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::mpsc::{Sender, Receiver, channel};
+use std::thread;
+use std::thread::JoinHandle;
+
+// Commands from main to disk
+
+enum Command {
+    Seek{head: u8, track: u8},
+    Read{sector: u8},
+    Write{sector: u8},
+    Stop
+}
+
+// Result from disk to main / status of channel
+
+const CMD_IDLE : usize = 0;
+const CMD_BUSY : usize = 1;
+const CMD_OK : usize = 2;
+
 pub struct Disk {
+    pub heads: usize,             // Constant: # of heads
+    pub tracks_per_head: usize,   // Constant: # of tracks per head
+    pub sectors_per_track: usize, // Constant: # of sectors per track
+
+    state: u8,                    // IDLE/BUSY/BADPARAM
+
+    head: u8,                     // Set by set_head
+    track: u8,                    // Set by set_track
+    sector: u8,                   // Set by set_sector
+    addr: u16,                    // Set by set_addr_{high,low}
+
+    cmd: Sender<Command>,         // Main -> disk commands
+    result: Arc<AtomicUsize>,     // Cleared by main thread, set by disk thread
+    buffer: Arc<Mutex<[u8; 128]>>,// Read/written by both threads
+    disk_thread: JoinHandle<()>
+}
+
+// Sector size is common knowledge, really
+
+const SEC_SIZE : usize = 128;
+
+// Status values of disk
+
+const STAT_IDLE : u8 = 0x00;
+const STAT_BADPARM : u8 = 0x01;
+const STAT_BUSY : u8 = 0xFF;
+
+struct DiskThreadData {
+    tracks_per_head: usize,
+    sectors_per_track: usize,
+    file: File,
+    cmd_recv: Receiver<Command>,
+    buffer: Arc<Mutex<[u8; 128]>>,
+    result: Arc<AtomicUsize>
 }
 
 impl Disk {
-    pub fn start(diskfile:&str) -> Disk {
-        Disk {}
+
+    // The backing file for a disk comprises a number of SEC_SIZE-byte sectors followed
+    // by some bytes that describe the disk geometry, currently the geo info is this:
+    //
+    //   heads: u8,
+    //   tracks: u8,
+    //   sectors: u8
+    //
+    // The number of sectors in the file must equal the product of the three values.
+    //
+    // The disk is laid out as a 3-dimensional row-major order array indexed by
+    // [head,track,sector].
+    
+    pub fn start(diskfile:&str) -> io::Result<Disk> {
+        let mut file = try!(OpenOptions::new().read(true).write(true).open(diskfile));
+
+        let mut tmp = [0; 3];
+        let fsize = try!(file.seek(SeekFrom::End(-3)));
+        try!(file.read(&mut tmp));
+
+        let heads = tmp[0] as usize;
+        let tracks_per_head = tmp[1] as usize;
+        let sectors_per_track = tmp[2] as usize;
+
+        assert!(fsize % (SEC_SIZE as u64) == 0);
+        assert!((heads * tracks_per_head * sectors_per_track * SEC_SIZE) as u64 == fsize);
+
+        let buffer : Arc<Mutex<[u8; 128]>> = Arc::new(Mutex::new([0; 128]));
+        let result = Arc::new(AtomicUsize::new(CMD_IDLE));
+        let (cmd_send, cmd_recv) = channel();
+
+        let disk_thread = start_disk_thread(DiskThreadData {
+            tracks_per_head: tracks_per_head,
+            sectors_per_track: sectors_per_track,
+            file: file,
+            cmd_recv: cmd_recv,
+            buffer: buffer.clone(),
+            result: result.clone()
+        });
+        
+        Ok(Disk {
+            heads: heads,
+            tracks_per_head: tracks_per_head,
+            sectors_per_track: sectors_per_track,
+
+            state: STAT_IDLE,
+
+            head: 0,
+            track: 0,
+            sector: 0,
+            addr: 0,
+
+            result: result,
+            cmd: cmd_send,
+            buffer: buffer,
+            disk_thread: disk_thread
+        })
     }
 
     pub fn halt(&mut self) {
+        self.cmd.send(Command::Stop).unwrap();
+        // FIXME:  This fails in the borrow checker - why?
+        // The usual disaster...
+        //self.disk_thread.join();
     }
 
     pub fn set_head(&mut self, value:u8) {
+        if self.state != STAT_BUSY {
+            self.head = value;
+        }
     }
 
     pub fn set_track(&mut self, value:u8) {
+        if self.state != STAT_BUSY {
+            self.track = value;
+        }
     }
 
     pub fn set_sector(&mut self, value:u8) {
+        if self.state != STAT_BUSY {
+            self.sector = value;
+        }
     }
 
-    pub fn set_dma_low(&mut self, value:u8) {
+    pub fn set_addr_low(&mut self, value:u8) {
+        if self.state != STAT_BUSY {
+            self.addr = (self.addr & 0xFF) | (value as u16);
+        }
     }
 
-    pub fn set_dma_high(&mut self, value:u8) {
+    pub fn set_addr_high(&mut self, value:u8) {
+        if self.state != STAT_BUSY {
+            self.addr = (self.addr & 0x00FF) | ((value as u16) << 8);
+        }
     }
     
-    pub fn seek(&mut self) {
+    pub fn seek_head_track(&mut self) {
+        if self.state != STAT_BUSY {
+            self.state = STAT_BUSY;
+            if !self.check_param() {
+                self.state = STAT_BADPARM;
+                return;
+            }
+            self.result.store(CMD_BUSY, Ordering::SeqCst);
+            self.cmd.send(Command::Seek{head: self.head, track: self.track}).unwrap();
+        }
     }
 
     pub fn read_sector(&mut self) {
+        if self.state != STAT_BUSY {
+            self.state = STAT_BUSY;
+            if !self.check_param() {
+                self.state = STAT_BADPARM;
+                return;
+            }
+            self.result.store(CMD_BUSY, Ordering::SeqCst);
+            self.cmd.send(Command::Read{sector: self.sector}).unwrap();
+        }
     }
 
     pub fn write_sector(&mut self) {
+        if self.state != STAT_BUSY {
+            self.state = STAT_BUSY;
+            if !self.check_param() {
+                self.state = STAT_BADPARM;
+                return;
+            }
+            self.result.store(CMD_BUSY, Ordering::SeqCst);
+            self.cmd.send(Command::Write{sector: self.sector}).unwrap();
+        }
     }
 
-    pub fn read_param(&mut self) {
+    pub fn copy_from_addr(&self, mem: &mut [u8; 65536]) {
+        if self.state != STAT_BUSY {
+            let mut i = 0;
+            let mut k = self.addr;
+            let buf = &mut self.buffer.lock().unwrap();
+            while i < 128 {
+                buf[i] = mem[k as usize];
+                i += 1;
+                k = k.wrapping_add(1);
+            }
+        }
     }
 
-    // 00 = idle, status clear
-    // FF = busy
-    // xx = other status
+    pub fn copy_to_addr(&mut self, mem: &mut [u8; 65536]) {
+        if self.state != STAT_BUSY {
+            let mut i = 0;
+            let mut k = self.addr;
+            let buf = &mut self.buffer.lock().unwrap();
+            while i < 128 {
+                mem[k as usize] = buf[i];
+                i += 1;
+                k = k.wrapping_add(1);
+            }
+        }
+    }
 
     pub fn status(&mut self) -> u8 {
-        return 0;
+        match self.result.load(Ordering::SeqCst) {
+            CMD_OK => {
+                self.state = STAT_IDLE;
+                self.result.store(CMD_IDLE, Ordering::SeqCst);
+            }
+            CMD_BUSY => {}
+            CMD_IDLE => {}
+            _ => {}
+        }
+        return self.state;
+    }
+
+    fn check_param(&self) -> bool {
+        return (self.head as usize) < self.heads && (self.track as usize) < self.tracks_per_head && (self.sector as usize) < self.sectors_per_track;
     }
 }
 
+fn start_disk_thread(mut dd: DiskThreadData) -> JoinHandle<()> {
+    thread::spawn(move || {
+        // file gets moved here
+        let mut head_latched = 0;
+        let mut track_latched = 0;
 
-/*
-    pub fn out(&self, port: u8, value: u8) {
-        match port {
-	    0 => {
-                iosys.putchar(value);
-                self.char_written = 0;   // ready
-            }
-	    4 => {
-	        self.disk_blockaddress_lo = value;
-            }
-	    5 => {
-	        self.disk_blockaddress_hi = value;
-            }
-    	    6 => {
-                self.disk_memoryaddress_lo = value;
-            }
-	    7 => {
-                self.disk_memoryaddress_hi = value;
-            }
-	    8 => {
-	        u16 blockno = ((u16)self.disk_blockaddress_hi << 8) | self.disk_blockaddress_lo;
-                u16 address = ((u16)self.disk_memoryaddress_hi << 8) | self.disk_memoryaddress_lo;
-                size_t nbytes;
-
-                self.disk_ready = 0xFF;
-
-		// FIXME: unreasonable to check this here, should be in BIOS
-		// We could however just mask with nblocks-1.
-                if blockno >= self.nblocks {
-                    self.disk_result = 1;
-		    self.disk_ready = 0;
+        loop {
+            match dd.cmd_recv.recv().unwrap() {
+                Command::Seek{head, track} => {
+                    head_latched = head as usize;
+                    track_latched = track as usize;
+                    // Can't seek here because read/write advance the file pointer; we
+                    // want two consecutive reads/writes without an intervening seek
+                    // to access the same sector.  So seeking is done by read/write.
+                    dd.result.store(CMD_OK, Ordering::SeqCst);
+                }
+                Command::Read{sector} => {
+                    let sector_latched = sector as usize;
+                    let address = dd.offs(head_latched, track_latched, sector_latched);
+                    let buf = &mut *dd.buffer.lock().unwrap();
+                    dd.file.seek(SeekFrom::Start(address as u64)).unwrap();
+                    dd.file.read_exact(buf).unwrap();
+                    dd.result.store(CMD_OK, Ordering::SeqCst);
+                }
+                Command::Write{sector} => {
+                    let sector_latched = sector as usize;
+                    let address = dd.offs(head_latched, track_latched, sector_latched);
+                    let buf = &*dd.buffer.lock().unwrap();
+                    dd.file.seek(SeekFrom::Start(address as u64)).unwrap();
+                    dd.file.write_all(buf).unwrap();
+                    dd.result.store(CMD_OK, Ordering::SeqCst);
+                }
+                Command::Stop => {
+                    // So... presumably when the moved dd is destructed the file
+                    // is closed.
                     return;
                 }
-
-		// FIXME: unreasonable to check this here, should be in BIOS
-		// We can't mask the address with 255.  We could wrap around,
-		// which seems most reasonable, it might be what a real DMA would do.
-                if (u32)address + 256 >= 65536 {
-                    self.disk_result = 2;
-		    self.disk_ready = 0;
-                    return;
-                }
-
-                if value == 0 || value == 1 {
-                    iosys.seek(block_device, (long)blockno*256, SEEK_SET);
-                }
-                if value == 0 {
-                    nbytes = iosys.read(z80->M + address, 1, 256, block_device);
-                }
-                else if value == 1 {
-                    nbytes = iosys.write(z80->M + address, 1, 256, block_device);
-                }
-                else if value == 2 {
-                    // Disk parameter read
-		    // FIXME
-                    //z80->M[address] = nblocks;
-                }
             }
-            else {
-                panic!("Bad disk I/O operation {?:}\n", value);
-            }
-
-            if (value == 0 || value == 1) && nbytes != 256 {
-                self.disk_result = 3;
-		self.disk_ready = 0;
-                return;
-            }
-
-            self.disk_result = 0;
-            self.disk_ready = 0;
-            break;
         }
-	_ => {
-	    panic!("Unmapped output port {?:}\n", port);
-        }
+    })
+}
+
+impl DiskThreadData {
+    fn offs(&self, head: usize, track: usize, sector: usize) -> usize {
+        ((head * self.tracks_per_head + track) * self.sectors_per_track + sector) * SEC_SIZE
     }
+}
 
-    pub fn in(&self, port: u8): u8 {
-        match port {	
-            1 => {
-                return self.char_written;
-            }
-            2 => {
-                if (self.char_available)
-                    return self.char_available;
-                self.the_char = iosys.blocking_getchar();
-                self.char_available = 255;
-                return self.char_available;
-            }
-            3 => {
-                self.char_available = 0;
-                return self.the_char;
-            }
-            9 => {
-                return self.disk_ready;
-            }
-            10 => {
-                return self.disk_result;
-            }
-            _ => {
-                panic!("Unmapped input port {:?}", port);
-            }
-        }
-    }
-
-*/
-//}
-
-// The disk system has a single thread probably, that accepts commands
-// on a channel and returns responses in various ways.  While the disk
-// is doing its thing the CPU can continue.  The disk should vector an
-// interrupt when it's done, though it will also have a polling interface.
-
-// Command classes:
-//
-// Status queries
-// Read command
-// Write command
-// Seek command (set head / track / sector)
-
-// The disk is backed by a regular file of fixed size.  We can do
-// synchronous commands on that file.  There will be no background
-// activity or buffering in the disk (yet) - it's old technology.
-// So for simplicity we will implement disk ops as file ops, with
-// seek / read / write, and we will flush after each write.
-
-// Not sure how to handle DMA, since that is inherently racy.  For now,
-// pass a buffer back and forth for the data.
-
+// For example:
 // Boot rom loads 256-byte bootloader from (hd 0, trk 0, sector 0 and 1)
 //
 //  - set head 0
@@ -182,73 +292,17 @@ impl Disk {
 //  - wait for ready
 //  - seek
 //  - wait for ready
-//  - read sector 0 to address 100h
+//  - set sector 0
+//  - read sector
 //  - wait for ready
-//  - read sector 1 to address 180h
+//  - set address 100h
+//  - copy to user
+//  - set sector 1
+//  - read sector
 //  - wait for ready
+//  - set address 180h
+//  - copy to user
 //  - jmp 100h
 //
 // Presumably there is some disk parameter block at the end of the
 // bootloader to allow the loader to figure out how to load the OS.
-
-
-
-    /*
-    struct stat info;
-
-    if (stat(diskfile, &info) != 0) {
-        fprintf(stderr, "Could not open disk image file %s\n", diskfile);
-        exit(1);
-    }
-    if (info.st_size % 256 != 0) {
-        fprintf(stderr, "Disk image file size is not divisible by block size\n");
-        exit(1);
-    }
-    unsigned nblocks = info.st_size / 256;
-    FILE* block_device = fopen(diskfile, "rb+");
-    if (block_device == NULL) {
-        fprintf(stderr, "Could not open block device file\n");
-        exit(1);
-    }
-    */
-
-        // TODO:
-        // - spin up a thread to handle the "disk"
-        // - for now, let the number of blocks be a constant known by that thread
-        // - on startup the thread needs to load the data
-        // - a disk operation is then:
-        //   - a command to spin up the disk
-        //   - an interrupt when the disk is spun up
-        //   - commands to set parameters
-        //   - a command to perform the operation
-        //   - an interrupt when the operation is done, or busy-wait (depending on parameters)
-        // - when data are written the thread needs to write them, probably
-        //   asynchronously, with interrupt on done
-        // - Presumably a lot of these disk data are in a monitor somehow
-        //
-        // TODO:
-        // - Console should be a thread too.
-
-
-    /*
-    // Simplistic block device (array of blocks)
-    disk_ready: u8,            // set to 0 when disk is idle / io is complete, 0ffh while busy
-    disk_result: u8,           // result of last io operation, 0=ok otherwise some error
-    disk_blockaddress_lo: u8,  // set by out()
-    disk_blockaddress_hi: u8,  // set by out()
-    disk_memoryaddress_lo: u8, // set by out()
-    disk_memoryaddress_hi: u8  // set by out()
-     */
-
-
-                  /*disk_ready: 0,
-                  disk_result: 0,
-                  disk_blockaddress_lo: 0,
-                  disk_blockaddress_hi: 0,
-                  disk_memoryaddress_lo: 0,
-                  disk_memoryaddress_hi: 0 */
-
-        // Stop the disk.  Flushing its backing store should be done as part
-        //  of programmatic action, not here, but this should kill the
-        //  threads at least.
-        // Stop the console: kill the threads.
