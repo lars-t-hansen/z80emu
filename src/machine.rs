@@ -52,6 +52,14 @@ impl Machine
 
 impl Z80Emu
 {
+    pub fn install_rom(&mut self, rom: &[u8], addr: usize, romsiz: usize) {
+        let mut k = addr & 65535;
+        for i in 0..romsiz-1 {
+            self.mem[k] = rom[i];
+            k = (k + 1) & 65535;
+        }
+    }
+
     pub fn halt(&mut self) {
         self.machine.console.halt();
         self.machine.disk0.halt();

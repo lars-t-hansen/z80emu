@@ -53,8 +53,7 @@ fn main() {
     emu.halt();
 }
 
-fn load_rom(filename: &str) -> Vec<u8>
-{
+fn load_rom(filename: &str) -> Vec<u8> {
     let mut file = File::open(filename).unwrap();
     let mut bytes = Vec::<u8>::new();
     file.read_to_end(&mut bytes).unwrap();

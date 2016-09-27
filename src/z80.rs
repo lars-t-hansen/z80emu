@@ -16,14 +16,6 @@ impl Z80 {
 }
 
 impl Z80Emu {
-    pub fn install_rom(&mut self, rom: &[u8], addr: usize, romsiz: usize) {
-        let mut k = addr & 65535;
-        for i in 0..romsiz-1 {
-            self.mem[k] = rom[i];
-            k = (k + 1) & 65535;
-        }
-    }
-
     pub fn reset(&mut self) {
         self.z80.af = 0;
         self.z80.bc = 0;
@@ -34,55 +26,71 @@ impl Z80Emu {
     }
 
     pub fn execute(&mut self) {
-        let mut pc = self.z80.pc;  // a macro, loadregs?
+        let mut pc = self.z80.pc;
         let mut a = (self.z80.af >> 8) as u8;
         let mut zf = false;
+
+        macro_rules! byte {
+            () => {{
+                let n = self.mem[pc as usize];
+                pc = pc.wrapping_add(1);
+                n
+            }}
+        }
+
+        macro_rules! byte_sext {
+            () => ( byte!() as i8 as i16 as u16 )
+        }
+        
+        macro_rules! word {
+            () => {{
+                let lo = byte!() as u16;
+                let hi = byte!() as u16;
+                (hi << 8) | lo
+            }}
+        }
+
         loop {
-            let op = self.mem[pc as usize];  // a macro, nextbyte?
-            println!("{} {}", pc, op);
-            pc = pc.wrapping_add(1);
+            let op = byte!();
             match op {
                 0x00 => /* NOP */ { }
                 0x20 => /* JR NZ, offs */ {
-                    let n = self.mem[pc as usize] as i8 as i16 as u16;
-                    pc = pc.wrapping_add(1);
+                    let n = byte_sext!();
                     if !zf { pc = pc.wrapping_add(n); }
                 }
                 0x28 => /* JR Z, offs */ {
-                    let n = self.mem[pc as usize] as i8 as i16 as u16;
-                    pc = pc.wrapping_add(1);
+                    let n = byte_sext!();
                     if zf { pc = pc.wrapping_add(n); }
                 }
                 0x37 => /* LD A, n */ {
-                    a = self.mem[pc as usize];
-                    pc = pc.wrapping_add(1);
+                    a = byte!();
                 }
                 0x76 => /* HLT */ {
-                    self.z80.pc = pc as u16;  // a macro, saveregs?
-                    //self.z80.af = af;  // fixme
+                    self.z80.pc = pc;
+                    //self.z80.af = af;       // FIXME
 		    println!("Halted");
                     return;
                 }
                 0xC3 => /* JP pq */ {
-                    let lo = self.mem[pc as usize];
-                    pc = pc.wrapping_add(1);
-                    let hi = self.mem[pc as usize];
-                    pc = ((hi as u16) << 8) | (lo as u16);
+                    // We get a spurious unused assignment error here because
+                    // the last update of the PC by 'word' is unnecessary, but
+                    // squelching it with #[allow(unused_assignments)] is not
+                    // supported except at the function level.
+                    let npc = word!();
+                    pc = npc;
                 }
                 0xD3 => /* OUT (n), A */ {
-                    let n = self.mem[pc as usize];
-                    pc = pc.wrapping_add(1);
+                    let n = byte!();
                     self.port_out(n, a);
                 }
                 0xDB => /* IN A, (n) */ {
-                    let n = self.mem[pc as usize];
-                    pc = pc.wrapping_add(1);
+                    let n = byte!();
                     a = self.port_in(n);
                 }
                 0xFE => /* CP A, n */ {
-                    let n = self.mem[pc as usize];
-                    pc = pc.wrapping_add(1);
+                    let n = byte!();
                     zf = a == n;
+                    // FIXME: more flags
                 }                    
                 _ => /* Unknown */ {
                     panic!("Unknown opcode {}", op);
