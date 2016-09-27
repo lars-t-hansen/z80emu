@@ -1,5 +1,4 @@
 use std::fs::{File, OpenOptions};
-use std::io;
 use std::io::{Read, Write, Seek, SeekFrom};
 use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -26,24 +25,33 @@ const CMD_OK : usize = 2;
 
 const SEC_SIZE : usize = 128;
 
-// The backing file for a disk comprises a number of SEC_SIZE-byte sectors followed
-// by some bytes that describe the disk geometry, currently the geo info is this:
+// The backing file for a disk comprises a number of SEC_SIZE-byte sectors
+// followed by a disk parameter block that describe the disk geometry.
 //
-//   heads: u8,
-//   tracks: u8,
-//   sectors: u8
+// The disk is laid out as a 3-dimensional row-major order array of sectors
+// indexed by [head,track,sector].
 //
-// The number of sectors in the file must equal the product of the three values.
+// Disk parameter block version 1:
 //
-// The disk is laid out as a 3-dimensional row-major order array indexed by
-// [head,track,sector].
-    
-// Disk parameter block constants
+//   struct DPB_v1 {
+//     heads: u8,
+//     tracks: u8,
+//     sectors: u8,
+//     version: u8
+//   }
+//
+// The number of sectors in the file must equal heads*tracks*sectors.
+//
+// For extensibility, version is always last, and the last byte in
+// the file.
 
-const DP_SIZE : usize = 3;        // Size of block in bytes
-const DP_HEADS : usize = 0;       // Offset of number of heads
-const DP_TRACKS : usize = 1;      // Offset of number of tracks
-const DP_SECS : usize = 2;        // Offset of number of sectors
+// Disk parameter block layout constants
+
+const DP1_SIZE : usize = 4;        // Size of block in bytes, including version
+
+const DP1_HEADS : usize = 0;       // Offset of number of heads
+const DP1_TRACKS : usize = 1;      // Offset of number of tracks
+const DP1_SECS : usize = 2;        // Offset of number of sectors
 
 pub struct Disk {
     pub heads: usize,             // Constant: # of heads
@@ -59,7 +67,7 @@ pub struct Disk {
 
     cmd: Sender<Command>,         // Main -> disk commands
     result: Arc<AtomicUsize>,     // Cleared by main thread, set by disk thread
-    buffer: Arc<Mutex<[u8; 128]>>,// Read/written by both threads
+    buffer: Arc<Mutex<[u8; SEC_SIZE]>>, // Read/written by both threads
     disk_thread: JoinHandle<()>
 }
 
@@ -76,27 +84,36 @@ struct DiskThreadData {
     sectors_per_track: usize,
     file: File,
     cmd_recv: Receiver<Command>,
-    buffer: Arc<Mutex<[u8; 128]>>,
+    buffer: Arc<Mutex<[u8; SEC_SIZE]>>,
     result: Arc<AtomicUsize>
 }
 
 impl Disk
 {
-    pub fn start(diskfile:&str) -> io::Result<Disk> {
-        let mut file = try!(OpenOptions::new().read(true).write(true).open(diskfile));
+    pub fn start(diskfile:&str) -> Disk {
+        let mut file = OpenOptions::new().read(true).write(true).open(diskfile).unwrap();
 
-        let mut tmp = [0; DP_SIZE];
-        let fsize = try!(file.seek(SeekFrom::End(-(DP_SIZE as i64))));
-        try!(file.read(&mut tmp));
+        let mut ver = [0; 1];
+        file.seek(SeekFrom::End(-1)).unwrap();
+        file.read(&mut ver).unwrap();
+        
+        if ver[0] != 1 {
+            panic!("Unsupported disk backing store version {}", ver[0]);
+        }
 
-        let heads = tmp[DP_HEADS] as usize;
-        let tracks_per_head = tmp[DP_TRACKS] as usize;
-        let sectors_per_track = tmp[DP_SECS] as usize;
+        let mut tmp = [0; DP1_SIZE];
+        let fsize = file.seek(SeekFrom::End(-(DP1_SIZE as i64))).unwrap();
+        file.read(&mut tmp).unwrap();
 
-        assert!(fsize % (SEC_SIZE as u64) == 0);
-        assert!((heads * tracks_per_head * sectors_per_track * SEC_SIZE) as u64 == fsize);
+        let heads = tmp[DP1_HEADS] as usize;
+        let tracks_per_head = tmp[DP1_TRACKS] as usize;
+        let sectors_per_track = tmp[DP1_SECS] as usize;
 
-        let buffer : Arc<Mutex<[u8; 128]>> = Arc::new(Mutex::new([0; 128]));
+        if fsize % (SEC_SIZE as u64) != 0 || (heads * tracks_per_head * sectors_per_track * SEC_SIZE) as u64 != fsize {
+            panic!("Disk backing store corrupted: {} {} {} {}", fsize, heads, tracks_per_head, sectors_per_track);
+        }
+
+        let buffer = Arc::new(Mutex::new([0; SEC_SIZE]));
         let result = Arc::new(AtomicUsize::new(CMD_IDLE));
         let (cmd_send, cmd_recv) = channel();
 
@@ -109,7 +126,7 @@ impl Disk
             result: result.clone()
         });
         
-        Ok(Disk {
+        Disk {
             heads: heads,
             tracks_per_head: tracks_per_head,
             sectors_per_track: sectors_per_track,
@@ -125,14 +142,12 @@ impl Disk
             cmd: cmd_send,
             buffer: buffer,
             disk_thread: disk_thread
-        })
+        }
     }
 
-    pub fn halt(&mut self) {
+    pub fn halt(self) {
         self.cmd.send(Command::Stop).unwrap();
-        // FIXME:  This fails in the borrow checker - why?
-        // The usual disaster...
-        //self.disk_thread.join();
+        self.disk_thread.join().unwrap();
     }
 
     pub fn set_head(&mut self, value:u8) {
@@ -237,7 +252,9 @@ impl Disk
     }
 
     fn check_param(&self) -> bool {
-        return (self.head as usize) < self.heads && (self.track as usize) < self.tracks_per_head && (self.sector as usize) < self.sectors_per_track;
+        return (self.head as usize) < self.heads
+            && (self.track as usize) < self.tracks_per_head
+            && (self.sector as usize) < self.sectors_per_track;
     }
 }
 

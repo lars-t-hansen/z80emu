@@ -1,21 +1,7 @@
 use Z80Emu;
 
-use console::Console;
-use disk::Disk;
-
-pub struct Machine
-{
-    console: Console,
-    disk0: Disk
-}
-
-impl Machine
-{
-    pub fn new(diskfile: &str) -> Machine {
-        Machine { console: Console::start(),
-                  disk0: Disk::start(diskfile).unwrap() }
-    }
-}
+use std::fs::File;
+use std::io::Read;
 
 // Port assignments:
 //
@@ -52,34 +38,32 @@ impl Machine
 
 impl Z80Emu
 {
-    pub fn install_rom(&mut self, rom: &[u8], addr: usize, romsiz: usize) {
-        let mut k = addr & 65535;
-        for i in 0..romsiz-1 {
-            self.mem[k] = rom[i];
-            k = (k + 1) & 65535;
-        }
-    }
+    pub fn load_rom(&mut self, romfile:&str, mut addr:u16) {
+        let mut file = File::open(romfile).unwrap();
+        let mut bytes = Vec::<u8>::new();
+        file.read_to_end(&mut bytes).unwrap();
 
-    pub fn halt(&mut self) {
-        self.machine.console.halt();
-        self.machine.disk0.halt();
+        for i in 0..bytes.len()-1 {
+            self.mem[addr as usize] = bytes[i];
+            addr = addr.wrapping_add(1);
+        }
     }
 
     pub fn port_out(&mut self, port: u8, value: u8) {
         match port {
-	    1 => self.machine.console.out_char(value),
-            5 => self.machine.disk0.set_head(value),
-            6 => self.machine.disk0.set_track(value),
-            7 => self.machine.disk0.set_sector(value),
-            8 => self.machine.disk0.set_addr_low(value),
-            9 => self.machine.disk0.set_addr_high(value),
+	    1 => self.console.out_char(value),
+            5 => self.disk0.set_head(value),
+            6 => self.disk0.set_track(value),
+            7 => self.disk0.set_sector(value),
+            8 => self.disk0.set_addr_low(value),
+            9 => self.disk0.set_addr_high(value),
             10 => {
                 match value {
-                    0 => self.machine.disk0.read_sector(),
-                    1 => self.machine.disk0.write_sector(),
-                    2 => self.machine.disk0.seek_head_track(),
-                    3 => self.machine.disk0.copy_from_addr(&mut self.mem),
-                    4 => self.machine.disk0.copy_to_addr(&mut self.mem),
+                    0 => self.disk0.read_sector(),
+                    1 => self.disk0.write_sector(),
+                    2 => self.disk0.seek_head_track(),
+                    3 => self.disk0.copy_from_addr(&mut self.mem),
+                    4 => self.disk0.copy_to_addr(&mut self.mem),
                     _ => panic!("Unknown disk command {}", value)
                 }
             }
@@ -89,13 +73,13 @@ impl Z80Emu
 
     pub fn port_in(&mut self, port: u8) -> u8 {
         match port {	
-            0 => if self.machine.console.out_ready() { 0 } else { 0xFF },
-            2 => if self.machine.console.in_ready() { 0xFF } else { 0 },
-            3 => self.machine.console.in_char(),
-            4 => self.machine.disk0.status(),
-           11 => self.machine.disk0.heads as u8,
-           12 => self.machine.disk0.tracks_per_head as u8,
-           13 => self.machine.disk0.sectors_per_track as u8,
+            0 => if self.console.out_ready() { 0 } else { 0xFF },
+            2 => if self.console.in_ready() { 0xFF } else { 0 },
+            3 => self.console.in_char(),
+            4 => self.disk0.status(),
+           11 => self.disk0.heads as u8,
+           12 => self.disk0.tracks_per_head as u8,
+           13 => self.disk0.sectors_per_track as u8,
             _ => panic!("Unmapped input port {}", port)
         }
     }

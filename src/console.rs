@@ -58,7 +58,7 @@ impl Console
                          out_chan: send_outchar };
     }
 
-    pub fn halt(&self) {
+    pub fn halt(self) {
         // TODO: Should stop the threads, see comments above.
     }
 
