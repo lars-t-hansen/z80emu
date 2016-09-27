@@ -1,5 +1,3 @@
-// TODO: Need some kind of support for interrupts.
-
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Write, Seek, SeekFrom};
 use std::sync::{Arc, Mutex};
@@ -7,6 +5,10 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{Sender, Receiver, channel};
 use std::thread;
 use std::thread::JoinHandle;
+
+// Interrupt vector for disk operations
+
+use machine::INTR_DSKRDY;
 
 // Commands from main to disk
 
@@ -92,7 +94,7 @@ struct DiskThreadData {
 
 impl Disk
 {
-    pub fn start(diskfile:&str) -> Disk {
+    pub fn start(diskfile:&str, interrupt:Arc<AtomicUsize>) -> Disk {
         let mut file = OpenOptions::new().read(true).write(true).open(diskfile).unwrap();
 
         let mut ver = [0; 1];
@@ -119,14 +121,15 @@ impl Disk
         let result = Arc::new(AtomicUsize::new(CMD_IDLE));
         let (cmd_send, cmd_recv) = channel();
 
-        let disk_thread = start_disk_thread(DiskThreadData {
-            tracks_per_head: tracks_per_head,
-            sectors_per_track: sectors_per_track,
-            file: file,
-            cmd_recv: cmd_recv,
-            buffer: buffer.clone(),
-            result: result.clone()
-        });
+        let disk_thread = start_disk_thread(interrupt,
+                                            DiskThreadData {
+                                                tracks_per_head: tracks_per_head,
+                                                sectors_per_track: sectors_per_track,
+                                                file: file,
+                                                cmd_recv: cmd_recv,
+                                                buffer: buffer.clone(),
+                                                result: result.clone()
+                                            });
         
         Disk {
             heads: heads,
@@ -260,7 +263,7 @@ impl Disk
     }
 }
 
-fn start_disk_thread(mut dd: DiskThreadData) -> JoinHandle<()> {
+fn start_disk_thread(interrupt:Arc<AtomicUsize>, mut dd: DiskThreadData) -> JoinHandle<()> {
     thread::spawn(move || {
         let mut head_latched = 0;
         let mut track_latched = 0;
@@ -273,6 +276,7 @@ fn start_disk_thread(mut dd: DiskThreadData) -> JoinHandle<()> {
                     head_latched = head as usize;
                     track_latched = track as usize;
                     dd.result.store(CMD_OK, Ordering::SeqCst);
+                    while interrupt.compare_and_swap(0, INTR_DSKRDY, Ordering::SeqCst) != 0 {}
                 }
                 Command::Read{sector} => {
                     let sector_latched = sector as usize;
@@ -281,6 +285,7 @@ fn start_disk_thread(mut dd: DiskThreadData) -> JoinHandle<()> {
                     dd.file.seek(SeekFrom::Start(address as u64)).unwrap();
                     dd.file.read_exact(buf).unwrap();
                     dd.result.store(CMD_OK, Ordering::SeqCst);
+                    while interrupt.compare_and_swap(0, INTR_DSKRDY, Ordering::SeqCst) != 0 {}
                 }
                 Command::Write{sector} => {
                     let sector_latched = sector as usize;
@@ -289,6 +294,7 @@ fn start_disk_thread(mut dd: DiskThreadData) -> JoinHandle<()> {
                     dd.file.seek(SeekFrom::Start(address as u64)).unwrap();
                     dd.file.write_all(buf).unwrap();
                     dd.result.store(CMD_OK, Ordering::SeqCst);
+                    while interrupt.compare_and_swap(0, INTR_DSKRDY, Ordering::SeqCst) != 0 {}
                 }
                 Command::Stop => {
                     // So... presumably when the moved dd is destructed the file

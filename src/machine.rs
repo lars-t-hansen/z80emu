@@ -3,15 +3,22 @@ use Z80Emu;
 use std::fs::File;
 use std::io::Read;
 
+// Interrupt vector assignments (evolving).  The vector is the low
+// three bits, the high bit is set to distinguish a vectored interrupt
+// from zero.
+
+pub const INTR_CONRDY : usize = 128;  // Console has input available or finished output
+pub const INTR_DSKRDY : usize = 129;  // Disk finished operation
+
 // Port assignments:
 //
-//  0..3  Console
+//  0..3  Console  (Device #0)
 //    0 (in)  - poll output status (00=ready for output, FF=busy)
 //    1 (out) - write char and set busy flag
 //    2 (in)  - poll input available (FF=input available, 00=no input)
 //    3 (in)  - read char and clear available flag
 //
-//  4..13 Disk 0
+//  4..13 Disk 0   (Device #1)
 //    4 (in)  - poll disk status (00=idle+ok, FF=busy, nn=idle+error)
 //    5 (out) - set head
 //    6 (out) - set track
@@ -35,6 +42,11 @@ use std::io::Read;
 //
 //   Disk controller has a one-sector buffer for transfers.  The
 //   buffer size is 128 bytes (fixed).
+//
+// 64  Interrupt controller [NYI]
+//  64 (out) - configure interrupt delivery
+//               0 - disable
+//               1 - enable
 
 impl Z80Emu
 {

@@ -1,5 +1,6 @@
-// TODO: Need some kind of support for interrupts.
-// TODO: Need proper shutdown support.
+// TODO: Need the last bits of shutdown support?
+
+use machine::INTR_CONRDY;
 
 use std::io::{Read, stdin, stdout, Write};
 use std::sync::Arc;
@@ -18,7 +19,7 @@ const DATA_AVAIL: usize = 0x8000;
 
 impl Console
 {
-    pub fn start() -> Console {
+    pub fn start(interrupt:Arc<AtomicUsize>) -> Console {
         let in_data = Arc::new(AtomicUsize::new(0));
         let out_rdy = Arc::new(AtomicBool::new(true));
         let (send_outchar, recv_outchar) = channel();
@@ -26,14 +27,16 @@ impl Console
         // Output thread
         {
             let out_rdy = out_rdy.clone();
+            let interrupt = interrupt.clone();
             thread::spawn(move || {
                 loop {
                     match recv_outchar.recv() {
                         Ok(c) => {
                             let buf = [c];
-                            stdout().write(&buf).expect("console out");
-                            stdout().flush().expect("console out");
+                            stdout().write(&buf).unwrap();
+                            stdout().flush().unwrap();
                             out_rdy.store(true, Ordering::SeqCst);
+                            while interrupt.compare_and_swap(0, INTR_CONRDY, Ordering::SeqCst) != 0 {}
                         }
                         Err(_) => {
                             break;
@@ -51,8 +54,9 @@ impl Console
                     let mut buf = [0; 1];
                     // TODO: interrupt the blocking read if we want to halt.  Not
                     // completely clear if this is properly supported, and if so how.
-                    stdin().read(&mut buf).expect("console in");
+                    stdin().read(&mut buf).unwrap();
                     in_data.store(DATA_AVAIL | (buf[0] as usize), Ordering::SeqCst);
+                    while interrupt.compare_and_swap(0, INTR_CONRDY, Ordering::SeqCst) != 0 {}
                 }
             });
         }
@@ -69,7 +73,7 @@ impl Console
     }
 
     pub fn in_ready(&self) -> bool {
-        return (self.in_data.load(Ordering::SeqCst) & 0x80) != 0;
+        return (self.in_data.load(Ordering::SeqCst) & DATA_AVAIL) != 0;
     }
 
     pub fn in_char(&self) -> u8 {
@@ -85,7 +89,7 @@ impl Console
     pub fn out_char(&self, ch:u8) {
         if self.out_rdy.load(Ordering::SeqCst) {
             self.out_rdy.store(false, Ordering::SeqCst);
-            self.out_chan.send(ch).expect("console send");
+            self.out_chan.send(ch).unwrap();
         }
     }
 }

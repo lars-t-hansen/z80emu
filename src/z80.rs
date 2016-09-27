@@ -1,5 +1,8 @@
 use Z80Emu;
 
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
+
 pub struct Z80 {
     af: u16,
     bc: u16,
@@ -7,12 +10,13 @@ pub struct Z80 {
     hl: u16,
     pc: u16,
     sp: u16,
+    interrupt: Arc<AtomicUsize>
 }
 
 impl Z80
 {
-    pub fn new() -> Z80 {
-        Z80 { af: 0, bc: 0, de: 0, hl: 0, pc: 0, sp: 0 }
+    pub fn new(interrupt: Arc<AtomicUsize>) -> Z80 {
+        Z80 { af: 0, bc: 0, de: 0, hl: 0, pc: 0, sp: 0, interrupt: interrupt }
     }
 }
 
@@ -53,6 +57,27 @@ impl Z80Emu
         }
 
         loop {
+            // Service interrupts
+            loop {
+                // TODO: if interrupts disabled then don't look
+                //
+                // TODO: There needs to be a PIC device that will just consume interrupts
+                // from the devices until it's set up to deliver them to the CPU.
+                // That should be modeled as a thread that has one atomic that it shares
+                // with the devices and one that it shares with the CPU.
+                //
+                // The BIOS programs the PIC once it's up and has set up vectors.
+
+                let intr = self.z80.interrupt.load(Ordering::Relaxed);
+                if intr == 0 { break; }
+                // TODO: service interrupt.  The interrupt number is an index into a vector
+                // in low memory that contains an address to jump to.  Presumably we push
+                // the PC (and flags?) and disable interrupts and jump.
+                println!("Interrupt: {}", intr & 7);
+                self.z80.interrupt.store(0, Ordering::Relaxed);
+            }
+
+            // Execute one instruction
             let op = byte!();
             match op {
                 0x00 => /* NOP */ { }

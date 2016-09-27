@@ -22,6 +22,9 @@ use console::Console;
 use disk::Disk;
 use z80::Z80;
 
+use std::sync::atomic::AtomicUsize;
+use std::sync::Arc;
+
 struct Z80Emu {
     z80: Z80,
     mem: [u8; 65536],
@@ -39,11 +42,13 @@ fn main() {
     let romfile = "rom.bin";
     let diskfile = "disk.bin";
 
+    let interrupt = Arc::new(AtomicUsize::new(0));
+        
     let mut emu = Z80Emu {
-        z80: Z80::new(),
+        z80: Z80::new(interrupt.clone()),
         mem: [0; 65536],
-        console: Console::start(),
-        disk0: Disk::start(diskfile)
+        console: Console::start(interrupt.clone()),
+        disk0: Disk::start(diskfile, interrupt.clone())
     };
 
     emu.load_rom(romfile, 0);
