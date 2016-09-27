@@ -1,3 +1,5 @@
+// TODO: Need some kind of support for interrupts.
+
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Write, Seek, SeekFrom};
 use std::sync::{Arc, Mutex};
@@ -9,9 +11,9 @@ use std::thread::JoinHandle;
 // Commands from main to disk
 
 enum Command {
-    Seek{head: u8, track: u8},
-    Read{sector: u8},
-    Write{sector: u8},
+    Seek { head: u8, track: u8 },
+    Read { sector: u8 },
+    Write{ sector: u8 },
     Stop
 }
 
@@ -42,8 +44,8 @@ const SEC_SIZE : usize = 128;
 //
 // The number of sectors in the file must equal heads*tracks*sectors.
 //
-// For extensibility, version is always last, and the last byte in
-// the file.
+// For extensibility, version is always last, and always the last byte in
+// the backing file.
 
 // Disk parameter block layout constants
 
@@ -290,7 +292,7 @@ fn start_disk_thread(mut dd: DiskThreadData) -> JoinHandle<()> {
                 }
                 Command::Stop => {
                     // So... presumably when the moved dd is destructed the file
-                    // is closed.
+                    // will be closed properly.
                     return;
                 }
             }
@@ -298,7 +300,8 @@ fn start_disk_thread(mut dd: DiskThreadData) -> JoinHandle<()> {
     })
 }
 
-impl DiskThreadData {
+impl DiskThreadData
+{
     fn offs(&self, head: usize, track: usize, sector: usize) -> usize {
         ((head * self.tracks_per_head + track) * self.sectors_per_track + sector) * SEC_SIZE
     }

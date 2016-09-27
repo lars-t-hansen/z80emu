@@ -9,13 +9,15 @@ pub struct Z80 {
     sp: u16,
 }
 
-impl Z80 {
+impl Z80
+{
     pub fn new() -> Z80 {
         Z80 { af: 0, bc: 0, de: 0, hl: 0, pc: 0, sp: 0 }
     }
 }
 
-impl Z80Emu {
+impl Z80Emu
+{
     pub fn reset(&mut self) {
         self.z80.af = 0;
         self.z80.bc = 0;

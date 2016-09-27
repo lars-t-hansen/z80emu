@@ -28,13 +28,17 @@ impl Console
             let out_rdy = out_rdy.clone();
             thread::spawn(move || {
                 loop {
-                    // TODO: should handle error here, which we'll receive if the
-                    // channel is closed on the parent side.
-                    let c = recv_outchar.recv().unwrap();
-                    let buf = [c];
-                    stdout().write(&buf).expect("console out");
-                    stdout().flush().expect("console out");
-                    out_rdy.store(true, Ordering::SeqCst);
+                    match recv_outchar.recv() {
+                        Ok(c) => {
+                            let buf = [c];
+                            stdout().write(&buf).expect("console out");
+                            stdout().flush().expect("console out");
+                            out_rdy.store(true, Ordering::SeqCst);
+                        }
+                        Err(_) => {
+                            break;
+                        }
+                    }
                 }
             });
         }
@@ -60,6 +64,8 @@ impl Console
 
     pub fn halt(self) {
         // TODO: Should stop the threads, see comments above.
+        // The output thread will exit when the main thread closes the
+        // channel on its side.  But we may want to stop the input thread properly.
     }
 
     pub fn in_ready(&self) -> bool {
