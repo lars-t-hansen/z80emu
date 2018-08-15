@@ -22,7 +22,7 @@ struct Machine<'a> {
 
 fn main() -> Result<(), io::Error>
 {
-    let mut _dsk_a = try!(file_backed_spinning_disk::make("disk.bin", A_HEADS, A_TRACKS, A_SECTORS));
+    let mut _dsk_a = try!(file_backed_spinning_disk::make("a_drive.bin", A_HEADS, A_TRACKS, A_SECTORS));
     let mut _tty = rust_console_io::make();
 
     let mut m = Machine {
