@@ -1,6 +1,6 @@
 [package]
-name = "z80emu"
+name = "z80emu2"
 version = "0.1.0"
-authors = ["lth"]
+authors = ["Lars T Hansen <lhansen@mozilla.com>"]
 
 [dependencies]

@@ -1,4 +1,4 @@
-[root]
-name = "z80emu"
+[[package]]
+name = "z80emu2"
 version = "0.1.0"
 
