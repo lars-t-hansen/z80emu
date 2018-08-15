@@ -1,0 +1,8 @@
+Currently the bin files are created by programs in util/.
+
+rom.bin loads head 0 / track 0 / sector 0 from the A drive into memory
+at address 0100h and jumps to it.
+
+a_drive.bin is a disk image for the A drive with heads=1, tracks=1,
+sectors=1.  The only sector contains a program (org 0100h) that prints
+'Hello, World!'  on the console and halts.

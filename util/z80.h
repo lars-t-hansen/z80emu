@@ -26,6 +26,7 @@
 #define A_DISK_OP_SEEK 0x00
 #define A_DISK_OP_READ 0x01
 #define A_DISK_OP_WRITE 0x02
+#define A_DISK_OP_CLEAR 0x03
 
 #define LDA(n)  sec_[k_++] = 0x37; sec_[k_++] = (n)
 #define OUTA(n) sec_[k_++] = 0xD3; sec_[k_++] = (n)

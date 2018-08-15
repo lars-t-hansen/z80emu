@@ -35,9 +35,7 @@ pub trait TTY : ByteReader + ByteWriter {}
 
 pub trait SpinningDisk
 {
-    // Get the disk status.  The status is set by seek(), read_sector(), or
-    // write_sector().  If the status is not Ok then it remains that until a
-    // successful seek().
+    // Get the disk status.  The status is set by disk_operation().
     fn get_status(&mut self) -> SpinningDiskStatus;
 
     // Set disk parameters.  These take effect at the next seek().
@@ -52,26 +50,32 @@ pub trait SpinningDisk
     // The command set is specific to the particular device implementation.
     // Generally speaking, these are typical operations:
     //
-    // SEEK.  Validate disk parameters and seek to sector.  Sets the status to
-    // Ok if the the parameters are valid and the seek succeeds, otherwise to
-    // SeekError.
+    // CLEAR.  Set the status to Ready but do not invalidate the disk parameters
+    // that have been set.
     //
-    // READ.  If the status is not Ok this does nothing.  Otherwise, read the
+    // SEEK.  If the status is not Ready this does nothing.  Validate disk
+    // parameters and seek to sector.  Sets the status to Done once the the
+    // parameters are valid and the seek has succeeded, otherwise to SeekError.
+    //
+    // READ.  If the status is not Ready this does nothing.  Otherwise, read the
     // selected (seeked-to) sector storing the bytes in memory at the selected
     // DMA address (with wraparound).  Sets status to ReadError if the read
-    // fails.
+    // fails; once the read is completed the status becomes Done.
     //
-    // WRITE.  If the status is not Ok this does nothing.  Otherwise, write the
+    // WRITE.  If the status is not Ready this does nothing.  Otherwise, write the
     // selected (seeked-to) sector from the bytes in memory at the selected DMA
-    // address (with wraparound).  Sets status to WriteError if the write fails.
+    // address (with wraparound).  Sets status to WriteError if the write fails;
+    // once the write is completed the status becomes Done.
     //
-    // If the operation is not known then status is set to OpError.
+    // If the operation is not known or is issued when the device is not Ready
+    // then status is set to OpError.
     fn disk_operation(&mut self, op: u8, mem: &mut [u8]);
 }
 
 #[derive(PartialEq,Clone,Copy)]
 pub enum SpinningDiskStatus {
-    Ok = 0x00,
+    Ready = 0x00,
+    Done = 0x01,
     OpError = 0xFF,
     SeekError = 0xFE,
     ReadError = 0xFD,

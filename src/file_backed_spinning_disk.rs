@@ -5,6 +5,7 @@
 //   0x00 = SEEK
 //   0x01 = READ
 //   0x02 = WRITE
+//   0x03 = CLEAR
 
 use std::fs::{File, OpenOptions};
 use std::io::{self, Read, Seek, SeekFrom};
@@ -23,6 +24,9 @@ pub struct FileBackedSpinningDisk
     // Computed seek offset
     offset: u64,
 
+    // Intermediate storage
+    buf: [u8; 128],
+
     // Result of operation
     status: SpinningDiskStatus,
 
@@ -40,10 +44,14 @@ pub fn make(filename:&str, heads: u8, tracks: u8, sectors: u8)
 {
     let the_disk = try!(OpenOptions::new().read(true).write(true).open(filename));
     Ok(FileBackedSpinningDisk {
-        head: 0, track: 0, sector: 0,
-        dma_lo: 0, dma_hi: 0,
+        head:       0,
+        track:      0,
+        sector:     0,
+        dma_lo:     0,
+        dma_hi:     0,
         offset:     0,
-        status:     SpinningDiskStatus::SeekError,
+        buf:        [0; 128],
+        status:     SpinningDiskStatus::Done,
         max_head:   heads-1,
         max_track:  tracks-1,
         max_sector: sectors-1,
@@ -66,6 +74,7 @@ impl SpinningDisk for FileBackedSpinningDisk
             0x00 => { self.seek(); }
             0x01 => { self.read_sector(mem); }
             0x02 => { self.write_sector(mem); }
+            0x03 => { self.clear(); }
             _    => { self.status = SpinningDiskStatus::OpError }
         }
     }
@@ -86,17 +95,26 @@ impl FileBackedSpinningDisk
         self.head as u32 * sectors_per_head + self.track as u32 * sectors_per_track + self.sector as u32 * sector_size
     }
 
+    fn clear(&mut self) {
+        self.status = SpinningDiskStatus::Ready;
+    }
+    
     fn seek(&mut self) {
+        if self.status != SpinningDiskStatus::Ready {
+            self.status = SpinningDiskStatus::OpError;
+            return;
+        }
         if !self.validate_params() {
             self.status = SpinningDiskStatus::SeekError;
             return;
         }
         self.offset = self.translate() as u64;
-        self.status = SpinningDiskStatus::Ok;
+        self.status = SpinningDiskStatus::Done;
     }
     
     fn read_sector(&mut self, mem: &mut [u8]) {
-        if self.status != SpinningDiskStatus::Ok {
+        if self.status != SpinningDiskStatus::Ready {
+            self.status = SpinningDiskStatus::OpError;
             return;
         }
 
@@ -106,11 +124,15 @@ impl FileBackedSpinningDisk
 
         match self.the_disk.seek(SeekFrom::Start(self.offset)) {
             Ok(_) => {
-                let dma = ((self.dma_hi as usize) << 8) | (self.dma_lo as usize);
-                // FIXME: Handle wraparound addresses
-                match self.the_disk.read(&mut mem[dma .. dma + 128]) {
-                    Ok(_) => { self.status = SpinningDiskStatus::Ok }
+                let mut dma = ((self.dma_hi as u16) << 8) | (self.dma_lo as u16);
+                // Read to intermediate buffer to handle wraparound addresses
+                match self.the_disk.read(&mut self.buf) {
+                    Ok(_) => { self.status = SpinningDiskStatus::Done }
                     _     => { self.status = SpinningDiskStatus::ReadError }
+                }
+                for i in 0..128 {
+                    mem[dma as usize] = self.buf[i];
+                    dma = dma.wrapping_add(1);
                 }
             }
             _ => { self.status = SpinningDiskStatus::ReadError; }
@@ -118,7 +140,8 @@ impl FileBackedSpinningDisk
     }
 
     fn write_sector(&mut self, mem: &mut [u8]) {
-        if self.status != SpinningDiskStatus::Ok {
+        if self.status != SpinningDiskStatus::Ready {
+            self.status = SpinningDiskStatus::OpError;
             return;
         }
 

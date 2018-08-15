@@ -8,7 +8,6 @@
 int main(int argc, char** argv) {
     Z80_VARS;
 
-    char k = 0;
     char *text = "Hello, world!\n";
 
     Z80_RESET_SEC();
@@ -18,7 +17,7 @@ int main(int argc, char** argv) {
     }
     HLT();
 
-    FILE *fp = fopen("disk.bin", "w");
+    FILE *fp = fopen("a_drive.bin", "w");
     fwrite(Z80_SEC, 1, SECSIZE, fp);
     fclose(fp);
     return 0;
