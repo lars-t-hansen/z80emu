@@ -1,7 +1,0 @@
-Currently the bin files are hand-assembled in hexl-mode.
-
-rom.bin loads head 0 / track 0 / sector 0 into memory at address 0100h
-and jumps to it.
-
-disk.bin is a disk with heads=1, tracks=1, sectors=1.  The only sector
-contains a program (org 0100h) that prints 'H' on the console and halts.
