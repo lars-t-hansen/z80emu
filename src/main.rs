@@ -4,25 +4,32 @@ mod rust_console_io;
 mod file_backed_spinning_disk;
 
 use std::fs::OpenOptions;
-use std::io::{self, Read};
+use std::io::Read;
 
 use z80::StopReason;
 use devices::{TTY, SpinningDisk};
 
-// Disk parameters.
+const TIMESLICE : usize = 10000;
+const ROM_SIZE : usize = 128;
+const ROM_ADDR : usize = 0x10000 - ROM_SIZE;
+
+// Physical device parameters
+
 const A_HEADS   : u8 = 1;       // Single sector
 const A_TRACKS  : u8 = 1;       //   disk for
 const A_SECTORS : u8 = 1;       //     testing
 
+// Container for physical devices
+
 struct Machine<'a> {
     tty:   &'a mut TTY,
     dsk_a: &'a mut SpinningDisk,
-    // Many more concrete devices here
+    // Many more physical devices here
 }
 
-fn main() -> Result<(), io::Error>
+fn main()
 {
-    let mut _dsk_a = try!(file_backed_spinning_disk::make("a_drive.bin", A_HEADS, A_TRACKS, A_SECTORS));
+    let mut _dsk_a = file_backed_spinning_disk::make("a_drive.bin", A_HEADS, A_TRACKS, A_SECTORS);
     let mut _tty = rust_console_io::make();
 
     let mut m = Machine {
@@ -30,18 +37,23 @@ fn main() -> Result<(), io::Error>
         dsk_a: &mut _dsk_a,
     };
 
-    let mut cpu = z80::make(/*pc=*/ 0x0000);
+    // We have boot ROM in high memory.  The rest of the memory (before that)
+    // will be filled with zeroes, ie NOPs, so after reset we'll just execute
+    // NOPs until we get to the ROM.  However we cheat here by just setting the
+    // initial PC to the ROM address, it simplifies debugging the emulator.
 
-    // 128 bytes of boot ROM at 0000h.
-    try!(setup_boot_rom(&mut cpu.mem[0..128]));
+    let mut cpu = z80::make(/*pc=*/ ROM_ADDR as u16);
 
+    setup_boot_rom(&mut cpu.mem[ROM_ADDR .. ROM_ADDR + ROM_SIZE]);
+    
     loop {
-        z80::run(&mut cpu);
+        z80::run(&mut cpu, TIMESLICE);
         match cpu.stop_reason {
             StopReason::Halt => {
                 break;
             }
             StopReason::Poll => {
+                // Do nothing, yet
             }
             StopReason::In => {
                 cpu.a = port_in(cpu.port_addr, &mut m);
@@ -54,13 +66,13 @@ fn main() -> Result<(), io::Error>
             }
         }
     }
-    Ok(())
 }
 
-fn setup_boot_rom(mem: &mut [u8]) -> Result<(), io::Error>
+fn setup_boot_rom(mem: &mut [u8])
 {
-    try!(OpenOptions::new().read(true).open("rom.bin")?.read(mem));
-    Ok(())
+    OpenOptions::new().read(true)
+        .open("rom.bin").expect("Could not open `rom.bin`")
+        .read(mem).expect("Could not read `rom.bin`");
 }
 
 fn port_out(port: u8, value: u8, mem: &mut [u8], m: &mut Machine)

@@ -39,11 +39,12 @@ pub struct FileBackedSpinningDisk
     the_disk:   File,
 }
 
-pub fn make(filename:&str, heads: u8, tracks: u8, sectors: u8)
-            -> Result<FileBackedSpinningDisk, io::Error>
+pub fn make(filename:&str, heads: u8, tracks: u8, sectors: u8) -> FileBackedSpinningDisk
 {
-    let the_disk = try!(OpenOptions::new().read(true).write(true).open(filename));
-    Ok(FileBackedSpinningDisk {
+    let the_disk = OpenOptions::new().read(true).write(true).open(filename)
+        .expect(&format!("Could not open `{}`", filename));
+
+    FileBackedSpinningDisk {
         head:       0,
         track:      0,
         sector:     0,
@@ -55,7 +56,7 @@ pub fn make(filename:&str, heads: u8, tracks: u8, sectors: u8)
         max_head:   heads-1,
         max_track:  tracks-1,
         max_sector: sectors-1,
-        the_disk:   the_disk })
+        the_disk:   the_disk }
 }
 
 impl SpinningDisk for FileBackedSpinningDisk

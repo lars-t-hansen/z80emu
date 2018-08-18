@@ -5,15 +5,16 @@
 
 #include "z80.h"
 
-int main(int argc, char** argv) {
-    Z80_VARS;
+int main(int argc, char** argv)
+{
+    Z80_VARS(1);
 
     char *text = "Hello, world!\n";
 
     Z80_RESET_SEC();
     while (*text) {
-        LDA(*text++);
-        OUTA(CON_OUT);
+        LDA     (*text++);
+        OUTA    (CON_OUT);
     }
     HLT();
 

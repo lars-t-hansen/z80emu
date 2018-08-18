@@ -5,10 +5,10 @@
 
 #include "z80.h"
 
-int main(int argc, char** argv) {
-    Z80_VARS;
+int main(int argc, char** argv)
+{
+    Z80_VARS(1);
 
-    char k = 0;
     char *text = "Hello, world!\n";
 
     Z80_RESET_SEC();

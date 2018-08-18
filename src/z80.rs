@@ -23,9 +23,6 @@ pub struct Z80
 
     // Alternate registers
     a_alt: u8, f_alt: u8, b_alt: u8, c_alt: u8, d_alt: u8, e_alt: u8, h_alt: u8, l_alt: u8,
-
-    // Constant parameters
-    timeslice: usize
 }
 
 pub enum StopReason {
@@ -37,28 +34,30 @@ pub enum StopReason {
 }
 
 pub fn make(pc:u16) -> Z80 {
+    // TODO: On RESET, the pc is zero but the other registers are all random,
+    // and it would be useful to set them to random values here.
+
     Z80 {
         mem: [0; 65536], pc: pc, sp: 0, ix: 0, iy: 0,
         stop_reason: StopReason::Poll,
         port_addr: 0,
         a: 0, f: 0, b: 0, c: 0, d: 0, e: 0, h: 0, l: 0,
-        a_alt: 0, f_alt: 0, b_alt: 0, c_alt: 0, d_alt: 0, e_alt: 0, h_alt: 0, l_alt: 0,
-        timeslice: 10000
+        a_alt: 0, f_alt: 0, b_alt: 0, c_alt: 0, d_alt: 0, e_alt: 0, h_alt: 0, l_alt: 0
     }
 }
 
 // Flag bits in the flag registers
 
-const CARRY_FLAG: u8 = 0x1;
+const CARRY_FLAG: u8 = 0x01;
 const CARRY_SHIFT: u8 = 0;
 
-const NEG_FLAG: u8 = 0x2;
+const NEG_FLAG: u8 = 0x02;
 const NEG_SHIFT: u8 = 1;
 
-const OVERFLOW_FLAG: u8 = 0x4;
+const OVERFLOW_FLAG: u8 = 0x04;
 const OVERFLOW_SHIFT: u8 = 2;
 
-const PARITY_FLAG: u8 = 0x4;
+const PARITY_FLAG: u8 = 0x04;
 const PARITY_SHIFT: u8 = 2;
 
 const HALF_FLAG: u8 = 0x10;
@@ -70,7 +69,9 @@ const ZERO_SHIFT: u8 = 6;
 const SIGN_FLAG: u8 = 0x80;
 const SIGN_SHIFT: u8 = 7;
 
-pub fn run(z80: &mut Z80) {
+const UNUSED_FLAGS: u8 = 0x28;
+
+pub fn run(z80: &mut Z80, mut timeslice: usize) {
     let mem = &mut z80.mem;
     let mut pc = z80.pc;
     let mut sp_ = z80.sp;
@@ -84,7 +85,6 @@ pub fn run(z80: &mut Z80) {
     let mut e = z80.e;
     let mut h = z80.h;
     let mut l = z80.l;
-    let mut timeslice = z80.timeslice;
 
     // 16-bit register operations
 
@@ -152,6 +152,8 @@ pub fn run(z80: &mut Z80) {
 
     macro_rules! set8_szhv0c {
         ($op1:ident, $op2:ident, $result:ident) => {{
+            f &= UNUSED_FLAGS;
+
             let sf = sf8!($result);
             let zf = zf8!($result);
             let hf = 0;         // FIXME
@@ -160,6 +162,8 @@ pub fn run(z80: &mut Z80) {
             f = sf | zf | hf | vf | cf;
         }};
         ($op1:ident, $op2:ident, $op3:ident, $result:ident) => {{
+            f &= UNUSED_FLAGS;
+
             let sf = sf8!($result);
             let zf = zf8!($result);
             let hf = 0;         // FIXME
@@ -171,6 +175,8 @@ pub fn run(z80: &mut Z80) {
 
     macro_rules! set8_sz1p00 {
         ($op1:ident, $op2:ident, $result:ident) => {{
+            f &= UNUSED_FLAGS;
+
             let sf = sf8!($result);
             let zf = zf8!($result);
             let pf = 0;         // FIXME
@@ -180,7 +186,7 @@ pub fn run(z80: &mut Z80) {
 
     macro_rules! set8__z1_0F {
         ($v:ident, $bit:ident, $result:ident) => {{
-            f &= CARRY_FLAG;
+            f &= CARRY_FLAG | UNUSED_FLAGS;
 
             let zf = zf8!($result);
             f |= zf | HALF_FLAG;
@@ -201,6 +207,8 @@ pub fn run(z80: &mut Z80) {
 
     macro_rules! set16_szhv0c {
         ($op1:ident, $op2:ident, $op3:ident, $result:ident) => {{
+            f &= UNUSED_FLAGS;
+
             let sf = sf16!($result);
             let zf = zf16!($result);
             let hf = 0;         // FIXME - carry from bit 11
@@ -212,7 +220,7 @@ pub fn run(z80: &mut Z80) {
 
     macro_rules! set16_FFhF0c {
         ($op1:ident, $op2:ident, $result:ident) => {{
-            f &= SIGN_FLAG | ZERO_FLAG | PARITY_FLAG;
+            f &= SIGN_FLAG | ZERO_FLAG | PARITY_FLAG | UNUSED_FLAGS;
 
             let hf = 0;         // FIXME - carry from bit 11
             let cf = cf16!($result);
