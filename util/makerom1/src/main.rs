@@ -30,12 +30,28 @@ fn main()
     z.outa(A_DISK_OP);
     z.lda(A_DISK_OP_SEEK);
     z.outa(A_DISK_OP);
+    // TODO: Technically wait here until status is Done
     
+/*
+    FWD     (L_seek_ready);
+    FWD     (L_io_err);
+
+    LABEL   (L_seek_wait);
+    INA     (A_DISK_STATUS);
+    CPA     (A_DISK_READY);
+    JPZ     (L_seek_ready);
+    CPA     (A_DISK_OK);
+    JPZ     (L_seek_wait);
+    JP      (L_io_err);
+    HERE    (L_seek_ready);
+*/
+
     // Read
     z.lda(A_DISK_OP_CLEAR);
     z.outa(A_DISK_OP);
-    z.lda(A_DISK_OP_SEEK);
+    z.lda(A_DISK_OP_READ);
     z.outa(A_DISK_OP);
+    // TODO: Technically wait here until status is Done
     
     // Invoke loaded program
     z.jp(LOADADDR);
