@@ -1,0 +1,11 @@
+[[package]]
+name = "makedisk1"
+version = "0.1.0"
+dependencies = [
+ "z80asm 0.1.0",
+]
+
+[[package]]
+name = "z80asm"
+version = "0.1.0"
+

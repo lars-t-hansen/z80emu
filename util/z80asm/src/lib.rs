@@ -28,24 +28,22 @@ pub const A_DISK_OK:u8 = 0x00;
 pub const A_DISK_READY:u8 = 0x01;
 // Error codes are negative
         
+#[allow(dead_code)]             // For "org", at the moment
 pub struct Z80Buf
 {
     buf: Vec<u8>,
+    org: u16,
     pos: usize,
     len: usize,
 }
 
 impl Z80Buf
 {
-    pub fn new(numsec:usize) -> Z80Buf {
+    pub fn new(numsec:usize, org:u16) -> Z80Buf {
         let mut buf = vec![];
         let len = numsec * 128;
         buf.resize(len, 0);
-        Z80Buf {
-            buf: buf,
-            pos: 0,
-            len: len
-        }
+        Z80Buf { buf, org, pos: 0, len }
     }
 
     pub fn create_image(&self, filename:&str) {

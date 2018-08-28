@@ -3,11 +3,12 @@ extern crate z80asm;
 use z80asm::*;
 
 const BANNER: &str = "Bleep firmware v0.1\n\n";
+const ORG: u16 = 0x0000;
 const LOADADDR: u16 = 0x100;
 
 fn main()
 {
-    let mut z = Z80Buf::new(1);
+    let mut z = Z80Buf::new(1, ORG);
 
     // Banner
     for c in BANNER.as_bytes() {
