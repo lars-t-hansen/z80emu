@@ -1,6 +1,11 @@
 .PHONY: all
 
-all: makerom0 makerom1 makedisk1
+PROGRAMS=makerom0 makerom1 makedisk1
+
+all: $(PROGRAMS)
+
+clean:
+	rm -f $(PROGRAMS) *.o
 
 *.o: z80.h
 

@@ -1,0 +1,6 @@
+[package]
+name = "z80asm"
+version = "0.1.0"
+authors = ["Lars T Hansen <lhansen@mozilla.com>"]
+
+[dependencies]
